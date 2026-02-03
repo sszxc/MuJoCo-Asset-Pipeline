@@ -71,6 +71,18 @@ def _set_object_geom_density(obj, collision_density: float = 500.0):
         pass
 
 
+def _set_object_mesh_scale(obj, scale: float = 1.0):
+    """
+    对物体中所有 mesh 设置统一缩放 scale（sx sy sz）。
+    scale=1.0 时仍显式设置为 (1,1,1)，保证输出一致。
+    """
+    if scale <= 0:
+        raise ValueError(f"scale 必须为正数，当前为 {scale}")
+    scale_tuple = (scale, scale, scale)
+    for mesh in obj.find_all("mesh"):
+        mesh.scale = scale_tuple
+
+
 def combine_scene(
     scene_template_path: str,
     object_path: str,
@@ -79,6 +91,7 @@ def combine_scene(
     spawn_euler=(0.0, 0.0, 0.0),
     add_freejoint=True,
     collision_density: float = 500.0,
+    scale: float = 1.0,
 ):
     """
     将场景模板与物体用 mjcf 组合，生成自包含 XML 和资产到 out_dir。
@@ -89,6 +102,7 @@ def combine_scene(
     - spawn_pos / spawn_euler: 物体在场景中的位姿（默认略高于桌面）
     - add_freejoint: 是否给目标物体的根 body 添加 freejoint（默认 True）
     - collision_density: Collision Geom 的密度，默认 500；Visual Geom 质量固定为 0
+    - scale: 物体导入场景前的统一缩放（对所有 mesh 设置 scale="s s s"），默认 1.0
     """
     mjcf = _ensure_dm_control()
 
@@ -97,9 +111,21 @@ def combine_scene(
     out_root = os.path.abspath(out_dir)
 
     if not os.path.isfile(scene_template_path):
-        raise FileNotFoundError(f"场景模板不存在: {scene_template_path}")
+        xml_files = [f for f in os.listdir(scene_template_path) if f.endswith(".xml")]  # 尝试寻找路径下的 xml 文件，如果唯一则使用
+        if len(xml_files) == 1:
+            scene_template_path = os.path.join(scene_template_path, xml_files[0])
+        elif len(xml_files) > 1:
+            raise FileNotFoundError(f"场景模板 XML 存在多个: {scene_template_path}, 请指定具体文件名")
+        else:
+            raise FileNotFoundError(f"场景模板 XML 不存在: {scene_template_path}")
     if not os.path.isfile(object_path):
-        raise FileNotFoundError(f"物体 XML 不存在: {object_path}")
+        xml_files = [f for f in os.listdir(object_path) if f.endswith(".xml")]  # 尝试寻找路径下的 xml 文件，如果唯一则使用
+        if len(xml_files) == 1:
+            object_path = os.path.join(object_path, xml_files[0])
+        elif len(xml_files) > 1:
+            raise FileNotFoundError(f"物体 XML 存在多个: {object_path}, 请指定具体文件名")
+        else:
+            raise FileNotFoundError(f"物体 XML 不存在: {object_path}")
 
     template_name = _stem(scene_template_path)
     object_name = _object_name_from_path(object_path)
@@ -115,7 +141,10 @@ def combine_scene(
     # 2. 为物体设置 geom 密度：Visual mass=0，Collision density=用户指定
     _set_object_geom_density(obj, collision_density=collision_density)
 
-    # 3. 将物体附加到场景：需要 freejoint 时附加到 worldbody（顶层），否则附加到 site
+    # 3. 对物体所有 mesh 设置统一缩放
+    _set_object_mesh_scale(obj, scale=scale)
+
+    # 4. 将物体附加到场景：需要 freejoint 时附加到 worldbody（顶层），否则附加到 site
     # 原因：attach 会在父元素下创建 attachment frame；若附加到 site，freejoint 会落在该 frame 下，
     # 而 MuJoCo 要求 freejoint 必须在顶层 body，故需附加到 worldbody，使 attachment frame 本身为顶层。
     if add_freejoint:
@@ -134,16 +163,16 @@ def combine_scene(
         )
         spawn_site.attach(obj)
 
-    # 4. 生成组合后的 XML 和资产
+    # 5. 生成组合后的 XML 和资产
     combined_xml = arena.to_xml_string()
     combined_assets = arena.get_assets()
 
-    # 5. 保存自包含 XML 到 scene 子目录
+    # 6. 保存自包含 XML 到 scene 子目录
     out_xml_path = os.path.join(out_dir, f"{out_basename}.xml")
     with open(out_xml_path, "w", encoding="utf-8") as f:
         f.write(combined_xml)
 
-    # 6. 保存资产文件（mesh、texture 等），保持相对路径以便 XML 引用正确
+    # 7. 保存资产文件（mesh、texture 等），保持相对路径以便 XML 引用正确
     for asset_name, asset_content in combined_assets.items():
         target = os.path.join(out_dir, asset_name)
         parent = os.path.dirname(target)
@@ -208,6 +237,13 @@ def main():
         metavar="DENSITY",
         help="Collision Geom 的密度（Visual Geom 质量固定为 0），默认 500",
     )
+    parser.add_argument(
+        "--scale",
+        type=float,
+        default=1.0,
+        metavar="S",
+        help="物体导入场景前的统一缩放（对所有 mesh 设置 scale），默认 1.0",
+    )
     args = parser.parse_args()
 
     try:
@@ -219,6 +255,7 @@ def main():
             spawn_euler=tuple(args.spawn_euler),
             add_freejoint=not args.no_freejoint,
             collision_density=args.collision_density,
+            scale=args.scale,
         )
         print(f"已生成: {out_xml_path}")
         print(f"场景名: {out_basename}, 资产文件数: {n_assets}")
