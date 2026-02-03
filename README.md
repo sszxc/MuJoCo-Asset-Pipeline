@@ -4,6 +4,8 @@
 - Use `obj2mjcf` for convex decomposition (MuJoCo only supports convex meshes for collision detection), and generate the XML files for each object
 - Use `dm_control` to merge the objects with a scene template
 
+![mujoco_collision_original_mesh](media/mujoco_collision_original_035_power_drill.jpeg)
+
 ## ycb_downloader.py
 
 - **`-o`, `--output`** — Output directory (default: `asset/ycb`).
