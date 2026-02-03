@@ -49,5 +49,6 @@ python combine_scene.py -o path/to/object.xml -s asset/scene_template/table.xml
 - **`--no-freejoint`** — Do not add a freejoint to the object’s root body (by default a freejoint is added for unconstrained motion).
 - **`--spawn-pos`** — Spawn position `x y z` (default `0 0 0.45`).
 - **`--spawn-euler`** — Spawn orientation in Euler angles (radians) `rx ry rz` (default `0 0 0`).
+- **`--collision-density`** — Collision Geom density (default `500`). Visual Geom density is set to 0.
 
 Requires `dm_control` (e.g. `pip install dm_control`).
