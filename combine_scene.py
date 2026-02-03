@@ -56,6 +56,21 @@ def _ensure_freejoint(obj):
         first_body.add("freejoint")
 
 
+def _set_object_geom_density(obj, collision_density: float = 500.0):
+    """
+    为物体的 default 类设置合适的密度/质量，避免双重计算：
+    - visual: geom mass=0（不参与惯性计算）
+    - collision: geom density=collision_density（由体积自动计算质量）
+    """
+    try:
+        # 访问嵌套的 default 类并设置 geom 属性
+        obj.default.default["visual"].geom.mass = 0
+        obj.default.default["collision"].geom.density = collision_density
+    except (KeyError, AttributeError):
+        # 物体没有 visual/collision default 类时静默跳过
+        pass
+
+
 def combine_scene(
     scene_template_path: str,
     object_path: str,
@@ -63,6 +78,7 @@ def combine_scene(
     spawn_pos=(0.0, 0.0, 0.45),
     spawn_euler=(0.0, 0.0, 0.0),
     add_freejoint=True,
+    collision_density: float = 500.0,
 ):
     """
     将场景模板与物体用 mjcf 组合，生成自包含 XML 和资产到 out_dir。
@@ -72,6 +88,7 @@ def combine_scene(
     - out_dir: 输出根目录（scene 文件夹），实际写入其子目录 <template>_<object>/ 下
     - spawn_pos / spawn_euler: 物体在场景中的位姿（默认略高于桌面）
     - add_freejoint: 是否给目标物体的根 body 添加 freejoint（默认 True）
+    - collision_density: Collision Geom 的密度，默认 500；Visual Geom 质量固定为 0
     """
     mjcf = _ensure_dm_control()
 
@@ -94,6 +111,9 @@ def combine_scene(
     # 1. 加载桌面场景和物体模型
     arena = mjcf.from_path(scene_template_path)
     obj = mjcf.from_path(object_path)
+
+    # 2. 为物体设置 geom 密度：Visual mass=0，Collision density=用户指定
+    _set_object_geom_density(obj, collision_density=collision_density)
 
     # 3. 将物体附加到场景：需要 freejoint 时附加到 worldbody（顶层），否则附加到 site
     # 原因：attach 会在父元素下创建 attachment frame；若附加到 site，freejoint 会落在该 frame 下，
@@ -181,6 +201,13 @@ def main():
         metavar=("RX", "RY", "RZ"),
         help="物体生成欧拉角 (弧度)，默认 0 0 0",
     )
+    parser.add_argument(
+        "--collision-density",
+        type=float,
+        default=500.0,
+        metavar="DENSITY",
+        help="Collision Geom 的密度（Visual Geom 质量固定为 0），默认 500",
+    )
     args = parser.parse_args()
 
     try:
@@ -191,6 +218,7 @@ def main():
             spawn_pos=tuple(args.spawn_pos),
             spawn_euler=tuple(args.spawn_euler),
             add_freejoint=not args.no_freejoint,
+            collision_density=args.collision_density,
         )
         print(f"已生成: {out_xml_path}")
         print(f"场景名: {out_basename}, 资产文件数: {n_assets}")
