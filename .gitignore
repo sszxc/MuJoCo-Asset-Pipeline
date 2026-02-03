@@ -1,1 +1,2 @@
-asset/
+asset/*
+!asset/scene_template/
