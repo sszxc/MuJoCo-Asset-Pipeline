@@ -2,16 +2,19 @@
 """
 使用 dm_control.mjcf 将「场景模板」与「物体」组合成自包含的 MuJoCo XML，
 保存到 asset/scene 下的子文件夹 <scene_template 名>_<物体名>/，内含 <name>.xml 及资产。
-默认会给目标物体的根 body 添加 freejoint（可用 --no-freejoint 关闭）。
+默认会给目标物体的根 body 添加 6DoF freejoint；可用 --ball-joint 改为仅旋转（ball joint，固定物体局部原点），或 --no-freejoint 不添加任何关节（完全固定）。
 
 用法示例：
   python combine_scene.py -o path/to/object.xml -s asset/scene_template/desktop_table_lights.xml
+  python combine_scene.py -o object.xml -s asset/scene_template/ground.xml --ball-joint
   python combine_scene.py -o object.xml -s asset/scene_template/ground.xml --out-dir asset/scene --no-freejoint
 """
 
 import argparse
 import os
 import sys
+
+import numpy as np
 
 
 def _ensure_dm_control():
@@ -83,13 +86,73 @@ def _set_object_mesh_scale(obj, scale: float = 1.0):
         mesh.scale = scale_tuple
 
 
+def _get_object_com_offset(obj):
+    """
+    编译物体模型，返回根 body 的质心在 body 局部坐标系下的偏移 (x,y,z)。
+    即 physics.model.body_ipos[body_id]，body 原点指向质心的向量。
+    若物体无根 body 或编译失败则返回 None。
+    """
+    mjcf = _ensure_dm_control()
+    try:
+        bodies = obj.worldbody.find_all("body")
+    except Exception:
+        return None
+    if not bodies:
+        return None
+    try:
+        physics = mjcf.Physics.from_mjcf_model(obj)
+    except Exception:
+        return None
+    # 编译后 body 0 为 world，物体根 body 为 body 1
+    body_id = 1
+    com_offset = np.array(physics.model.body_ipos[body_id].copy())
+    return com_offset
+
+
+def _shift_root_body_content_to_com(obj, com_offset):
+    """
+    将物体根 body 下所有直接子元素（geom、body、site 等）的 pos 平移 -com_offset，
+    使根 body 的原点落在质心位置，从而绕质心旋转时几何不偏移。
+    """
+    try:
+        bodies = obj.worldbody.find_all("body")
+    except Exception:
+        return
+    if not bodies:
+        return
+    root_body = bodies[0]
+    offset = np.array(com_offset)
+
+    def shift_pos(elem):
+        if not hasattr(elem, "pos"):
+            return
+        try:
+            p = elem.pos
+            if p is None:
+                p = (0.0, 0.0, 0.0)
+            p = np.array(p)
+            elem.pos = tuple(p - offset)
+        except (TypeError, ValueError):
+            pass
+
+    for geom in obj.find_all("geom"):
+        if getattr(geom, "parent", None) is root_body:
+            shift_pos(geom)
+    for body in obj.find_all("body"):
+        if body is not root_body and getattr(body, "parent", None) is root_body:
+            shift_pos(body)
+    for site in obj.find_all("site"):
+        if getattr(site, "parent", None) is root_body:
+            shift_pos(site)
+
+
 def combine_scene(
     scene_template_path: str,
     object_path: str,
     out_dir: str,
     spawn_pos=(0.0, 0.0, 0.45),
     spawn_euler=(0.0, 0.0, 0.0),
-    add_freejoint=True,
+    object_joint: str = "6dof",
     collision_density: float = 500.0,
     scale: float = 1.0,
 ):
@@ -100,7 +163,7 @@ def combine_scene(
     - object_path: 物体 MuJoCo XML 路径
     - out_dir: 输出根目录（scene 文件夹），实际写入其子目录 <template>_<object>/ 下
     - spawn_pos / spawn_euler: 物体在场景中的位姿（默认略高于桌面）
-    - add_freejoint: 是否给目标物体的根 body 添加 freejoint（默认 True）
+    - object_joint: 物体根 body 的关节类型："6dof"（平移+旋转）、"ball"（仅旋转，固定局部原点）、"none"（无关节，完全固定）。为 6dof/ball 时会先计算质心，再将外观与碰撞几何平移使原点在质心，实现绕质心旋转。
     - collision_density: Collision Geom 的密度，默认 500；Visual Geom 质量固定为 0
     - scale: 物体导入场景前的统一缩放（对所有 mesh 设置 scale="s s s"），默认 1.0
     """
@@ -144,17 +207,29 @@ def combine_scene(
     # 3. 对物体所有 mesh 设置统一缩放
     _set_object_mesh_scale(obj, scale=scale)
 
-    # 4. 将物体附加到场景：需要 freejoint 时附加到 worldbody（顶层），否则附加到 site
+    # 3.5 若添加关节（6dof/ball），将物体几何平移到质心为原点，使绕质心旋转
+    if object_joint != "none":
+        com_offset = _get_object_com_offset(obj)
+        if com_offset is not None and not np.allclose(com_offset, 0.0):
+            _shift_root_body_content_to_com(obj, com_offset)
+
+    # 4. 将物体附加到场景：需要关节时附加到 worldbody（顶层），否则附加到 site
     # 原因：attach 会在父元素下创建 attachment frame；若附加到 site，freejoint 会落在该 frame 下，
     # 而 MuJoCo 要求 freejoint 必须在顶层 body，故需附加到 worldbody，使 attachment frame 本身为顶层。
-    if add_freejoint:
-        # 附加到 worldbody，attachment frame 即为顶层 body，可合法添加 freejoint
+    if object_joint != "none":
+        # 附加到 worldbody，attachment frame 即为顶层 body，可合法添加 freejoint 或 ball joint
         attachment_frame = arena.worldbody.attach(obj)
         attachment_frame.pos = spawn_pos
         attachment_frame.euler = spawn_euler
-        attachment_frame.add("freejoint")
+        if object_joint == "6dof":
+            attachment_frame.add("freejoint")
+        elif object_joint == "ball":
+            # ball joint：仅 3 个旋转自由度，物体局部原点固定在 attachment frame 位置
+            attachment_frame.add("joint", type="ball", damping=0.0005)
+        else:
+            raise ValueError(f"不支持的 object_joint: {object_joint}，应为 '6dof'、'ball' 或 'none'")
     else:
-        # 不需要 freejoint 时保持原有逻辑：在 site 上设置位姿并附加物体
+        # 无关节时：在 site 上设置位姿并附加物体，完全固定
         spawn_site = arena.worldbody.add(
             "site",
             name="spawn_site_0",
@@ -212,7 +287,12 @@ def main():
     parser.add_argument(
         "--no-freejoint",
         action="store_true",
-        help="不给目标物体添加 freejoint",
+        help="不给目标物体添加任何关节（完全固定到 spawn 位姿）",
+    )
+    parser.add_argument(
+        "--ball-joint",
+        action="store_true",
+        help="使用 ball joint（仅旋转自由度，物体局部原点固定；与 --no-freejoint 同时指定时以 --no-freejoint 为准）",
     )
     parser.add_argument(
         "--spawn-pos",
@@ -246,6 +326,9 @@ def main():
     )
     args = parser.parse_args()
 
+    # 关节类型：--no-freejoint -> none；--ball-joint -> ball；否则 6dof
+    object_joint = "none" if args.no_freejoint else ("ball" if args.ball_joint else "6dof")
+
     try:
         out_xml_path, out_basename, n_assets = combine_scene(
             scene_template_path=args.scene_template,
@@ -253,7 +336,7 @@ def main():
             out_dir=args.out_dir,
             spawn_pos=tuple(args.spawn_pos),
             spawn_euler=tuple(args.spawn_euler),
-            add_freejoint=not args.no_freejoint,
+            object_joint=object_joint,
             collision_density=args.collision_density,
             scale=args.scale,
         )

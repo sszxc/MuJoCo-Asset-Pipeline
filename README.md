@@ -43,10 +43,12 @@ Requires `obj2mjcf` (e.g. `pip install obj2mjcf`). Only objects with `google_16k
 python combine_scene.py -o path/to/object.xml -s asset/scene_template/table.xml
 ```
 
+When a joint is added (default or `--ball-joint`), the object’s center of mass is computed and the visual/collision geometry is shifted so the body origin lies at the COM; rotation is then around the center of mass.
+
 - **`-o`, `--object`** — Path to the object MuJoCo XML (required).
 - **`-s`, `--scene-template`** — Path to the scene template XML (e.g. `asset/scene_template/ground.xml`, `asset/scene_template/table.xml`).
 - **`--out-dir`** — Output root directory (default `asset/scene`). Combined model is written to a subfolder `<template>_<object>/` with a **self-contained** XML and assets (meshes, textures).
-- **`--no-freejoint`** — Do not add a freejoint to the object’s root body (by default a freejoint is added for unconstrained motion).
+- **Joint mode** — By default a **6DoF freejoint** is added (full translation and rotation). **`--ball-joint`** uses a ball joint only (3 rotational DoF, position fixed at spawn; joint damping `0.0005`). **`--no-freejoint`** adds no joint (object fully fixed at spawn pose).
 - **`--spawn-pos`** — Spawn position `x y z` (default `0 0 0.45`).
 - **`--spawn-euler`** — Spawn orientation in Euler angles (radians) `rx ry rz` (default `0 0 0`).
 - **`--collision-density`** — Collision Geom density (default `500`). Visual Geom density is set to 0.
