@@ -12,6 +12,7 @@
 
 import argparse
 import os
+import shlex
 import sys
 
 import numpy as np
@@ -342,6 +343,23 @@ def main():
         )
         print(f"已生成: {out_xml_path}")
         print(f"场景名: {out_basename}, 资产文件数: {n_assets}")
+        # 将本次创建场景所用的命令与参数保存到输出文件夹
+        try:
+            out_dir = os.path.dirname(out_xml_path)
+            cmd_record_path = os.path.join(out_dir, "combine_command.txt")
+            with open(cmd_record_path, "w", encoding="utf-8") as f:
+                # 完整命令行
+                full_cmd = " ".join(shlex.quote(a) for a in sys.argv)
+                f.write(f"full_command: {full_cmd}\n\n")
+                # 解析后的参数
+                f.write("parsed_args:\n")
+                for k, v in sorted(vars(args).items()):
+                    f.write(f"{k} = {v}\n")
+                # 衍生参数
+                f.write(f"\nobject_joint = {object_joint}\n")
+            print(f"已保存命令记录到: {cmd_record_path}")
+        except Exception as e:
+            print(f"警告: 无法写入命令记录文件: {e}", file=sys.stderr)
     except FileNotFoundError as e:
         print(f"错误: {e}", file=sys.stderr)
         sys.exit(1)
